@@ -78,7 +78,7 @@ ls smart_buildings/training_scenarios/building_train_1/
 - 观测布局
 - 各设定值的物理作用及常见陷阱。
 
-**应以该文件而不是本节作为接口细节的权威参考**。
+**应该阅读[[./docs/transfer_policy.md]], 而不是本节作为接口细节的权威参考**。
 
 用于本地评测的策略是一个具有两个方法的普通 Python 类，**不需要继承任何基类**：
 
