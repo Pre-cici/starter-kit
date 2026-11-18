@@ -1,128 +1,86 @@
-# Smart Buildings Foundation Model Competition — Starter Kit
+# Starter Kit
 
-Develop a single control policy that operates the HVAC systems of commercial
-buildings across a range of layouts and weather conditions, deciding when to
-run each air handler and the hot-water pump, setting their temperature and
-pressure setpoints, and dividing the resulting air between zones to jointly
-minimize energy cost and carbon emissions while maintaining occupant comfort.
-
-![The controlled building and its HVAC equipment](images/device_locations.png)
-
-The evaluation spans **6 buildings × 5 weather regimes = 30 scenarios**. A
-submission is one policy that must generalize across all of them.
-
-The competition runs on Kaggle. For the rules, the leaderboard, the submission
-template and how to enter, see the competition page:
-**<https://www.kaggle.com/competitions/neurips-2026-smart-buildings/>**
-
-## Task
-
-**Action (hybrid, per step):** for each air handler and the hot-water pump, a
-discrete on/off run command plus continuous supply-air temperature, static
-pressure and recirculation setpoints (and supply-water temperature and
-differential pressure for the pump); and for each VAV box, a damper position and
-a reheat valve position. Actions are normalized to `[-1, 1]` (continuous) and
-`{0, 1}` (discrete). For a building with `K` air handlers and `V` zones, the
-discrete action has shape `K+1` and the continuous action has shape `3K+2+2V`.
-
-The air handler picks one supply-air temperature for every zone it serves, so
-the per-zone dampers and reheat valves are the only place a per-zone decision
-can be made. Ventilation floors are enforced by the simulator: a running air
-handler holds a minimum static pressure and cannot recirculate more than 70%,
-and every damper is floored at 10% open, so "close everything" is not available
-as an energy strategy.
-
-**Observation (per step, length scales with the building):**
-- Per zone: air temperature, current heating/cooling setpoints, damper position, reheat valve position, airflow setpoint
-- Per air handler: supply-air temperature, static pressure, airflow (sensed + setpoints), recirculation, cooling-request count, fan run status
-- Hot-water system: supply water temperature (sensed + setpoint)
-- Building-level occupancy count and comfort-schedule flags (in comfort mode now / soon)
-- Outside air temperature
-- Time of day and day of week (cyclically encoded)
-
-**Reward (per step):** a weighted trade-off of occupant productivity/comfort
-minus energy cost minus carbon emissions (weights 0.6 / 0.2 / 0.2).
-
-Because the number of air handlers and zones differs per building, both the
-observation and action vectors change shape per building — there is no fixed
-input/output layout to memorize. Your policy also receives a **building
-metadata** dict at construction time (action indices, observation field names,
-zone-to-AHU assignment, floor plan, schedule, normalization constants) so it
-can adapt to each building's structure.
-
-![Buildings differ in floor plan, zone count, and air-handler assignment](images/floorplan_variability.png)
-
-Each building is partitioned into zones served by a handful of air handlers, and
-the partition differs from building to building — the policy must infer the
-right control strategy from structure and live observations rather than recall
-fixed setpoints. A single day's rollout tracks zone temperatures against the
-comfort band, the per-step reward, and occupancy:
-
-![One day of a rollout: temperatures, reward, and occupancy](images/overview.png)
+开始之前请先阅读 [Introduction](/docs/Introduction.md)
 
 ## Layout
 
-```
+```text
 smart_buildings/
-  smart_control/            # the building simulator (environment, simulator, reward, models, proto, utils)
-  baselines/                # reference policies you are scored against
-  buildings/                # the 6 building definitions the set is built from
-  weather/                  # weather presets (6 recorded stations; the set uses 5)
-  training_scenarios/       # 30 generated scenarios (building × weather), each with config.gin
-  run_floor_generator.py    # sample new building configs
-  run_scenario_generator.py # building × weather -> runnable scenarios
-  run_environment.py        # load one scenario, inspect its spaces, smoke-test it
-  evaluate.py               # test YOUR policy on scenarios (env loading, rollout, POLICY_MAP)
-images/                     # figures used in this README
-```
-
-## Install
-
-```bash
-pip install -e .
+  smart_control/            # 建筑仿真器（环境、仿真、奖励、模型、proto、工具）
+  baselines/                # 用于对比的参考控制策略
+  buildings/                # 训练集使用的 6 栋建筑定义
+  weather/                  # 天气预设（6 个实测站点，训练集使用其中 5 个）
+  training_scenarios/       # 30 个生成的场景（建筑 × 天气），各含 config.gin
+  run_floor_generator.py    # 采样生成新的建筑配置
+  run_scenario_generator.py # 建筑 × 天气 → 可运行场景
+  run_environment.py        # 加载场景、检查空间、执行冒烟测试
+  evaluate.py               # 在场景上评测你的策略（加载环境、运行轨迹、POLICY_MAP）
+assets/                     # 文档使用的图片
 ```
 
 ## Quickstart
 
-```bash
-# 1. Look at one scenario: its action/observation spaces and a quick rollout
-python -m smart_buildings.run_environment --building building_train_1 --weather fairbanks_1
+先安装[uv](https://docs.astral.sh/uv/getting-started/installation/)。
 
-# 2. Evaluate the starter policy on all 30 scenarios
-python -m smart_buildings.evaluate
+```bash
+git clone https://github.com/Pre-cici/starter-kit.git
+cd starter-kit
+
+uv sync --locked --python 3.12 --extra dev
 ```
 
-That runs `transfer`, the starter policy in
-`smart_buildings/baselines/transfer_policy.py`. As shipped it returns the zero
-action every step, so the evaluator works out of the box and you have a running
-shape to edit. **That file is where you write your policy.**
+```bash
+# 1. 查看一个场景：动作/观测空间及简短仿真轨迹
+uv run python -m smart_buildings.run_environment --building building_train_1 --weather fairbanks_1
 
-The 30 scenarios are 6 buildings against 30 weather strips, paired so that each
-building sees one strip per station and no strip is used twice. Strips are named
-`<station>_<n>` for the five stations in the set — `fairbanks`, `denver`,
-`atlanta`, `phoenix` and `singapore` — so `fairbanks_1`, `phoenix_6`, and so on.
-A sixth station, `minneapolis`, still ships as generator input, but no shipped
-scenario uses it. `training_set.yaml` is what defines the set.
+# 2. 在全部 30 个场景上评测初始策略
+uv run python -m smart_buildings.evaluate
+```
 
-Each strip replays a different 30-day window of recorded 2023 hourly station
-data, which is 8,640 steps at the five-minute timestep. Every step is scored;
-there is no warm-up period. There is no synthetic weather option. Buildings
-differ in envelope construction as well as in geometry, so two buildings under
-the same station still behave differently.
+上述命令运行的是 `transfer`，即 `smart_buildings/baselines/transfer_policy.py` 中的初始策略。
 
-The pairing is listed in `smart_buildings/training_set.yaml`. Not every
-building/strip combination exists, so check what a building has with
-`ls smart_buildings/training_scenarios/building_train_1`.
+### weather data and training set
 
-## Writing your policy
+仓库提供 **6 个天气站、48 个天气片段**。
 
-**Edit `smart_buildings/baselines/transfer_policy.py`.** It carries the full
-interface contract in its module docstring — action layout, observation layout,
-what each setpoint physically does, and the traps. Read that first;
-it is the reference, not this section.
+- 六个天气站分别为 `fairbanks`、`denver`、`atlanta`、`phoenix`、`singapore` 和 `minneapolis`，每站有一份 [CSV 原始数据](smart_buildings/weather/csv/)
+- 每个天气站有 8 份 [片段配置](smart_buildings/weather/)，文件名格式为 `<station>_<n>.yaml`，同站的片段共用一份 CSV。
+- 通过 `start_timestamp` 指定从原始CSV中截取的连续 30 天。
+- 仿真每 5 分钟推进一步，每个完整场景共 **8,640 步**。生成器不支持合成天气。
 
-A policy is a plain Python class with two methods. No base class, nothing to
-subclass:
+仓库发布的 **30 个训练场景**:
+
+- 天气站只使用 `fairbanks`、`denver`、`atlanta`、`phoenix` 和 `singapore`
+- 6 栋建筑各从这 5 个站选配一段天气，每个天气片段只用一次。
+- 并非所有建筑和天气片段的组合都存在。
+- 具体配对见 [training_set.yaml](smart_buildings/training_set.yaml)
+- `minneapolis` 未被纳入发布的训练集，但可用于生成新场景。
+
+在仓库根目录运行：
+
+```bash
+# 查看全部天气站和片段配置
+ls smart_buildings/weather/csv/
+ls smart_buildings/weather/*.yaml
+
+# 查看 Fairbanks 各片段的开始时间
+grep -H '^start_timestamp:' smart_buildings/weather/fairbanks_*.yaml
+
+# 使用以下命令查看某栋建筑可用的天气片段：
+ls smart_buildings/training_scenarios/building_train_1/
+```
+
+## Writing Your Policy
+
+**编辑 `smart_buildings/baselines/transfer_policy.py`。** 该文件的模块文档字符串完整定义了接口规范，包括:
+
+- 动作布局
+- 观测布局
+- 各设定值的物理作用及常见陷阱。
+
+**应以该文件而不是本节作为接口细节的权威参考**。
+
+用于本地评测的策略是一个具有两个方法的普通 Python 类，**不需要继承任何基类**：
 
 ```python
 class TransferPolicy:
@@ -138,158 +96,148 @@ class TransferPolicy:
         ...
 ```
 
-Keep the class name and you need change nothing else — it is already registered
-in `POLICY_MAP`. Rename it, or add a second policy, and register it there under
-whatever key you want to pass to `--policies`.
+保留类名就无需更改其他内容，因为它已经注册在 `POLICY_MAP` 中。
+如果重命名该类或者添加第二个策略，需要在 `POLICY_MAP` 中注册，并使用对应的键传给 `--policies`。
 
-Two things worth repeating from the docstring. **The continuous action is
-interleaved**, `[temp_0, pressure_0, recirc_0, temp_1, ...]` with the two
-water-system entries appended and the zone entries after those. Read
-`building_meta_data["temp_indices"]`, `["pressure_indices"]`,
-`["recirculation_indices"]`, `["water_indices"]` and `["zone_action_indices"]`
-rather than assuming offsets. A policy that hardcodes the layout looks like it
-works and quietly drives the wrong actuator.
+需要特别强调文档字符串中的两点：
 
-And **the zero action is not the off action.** Zero is the middle of each
-normalised range, so a slot you never write is a half-open damper, not a shut
-one. Write every slot you care about, including the ones you want at rest.
+1. **连续动作采用交错排列**
+   - 形式为`[temp_0, pressure_0, recirc_0, temp_1,...]`，接着附加两个热水系统控制量，之后才是各 Zone 的控制量。
+   - 应读取 `building_meta_data["temp_indices"]`、`["pressure_indices"]`、`["recirculation_indices"]`、`["water_indices"]` 和 `["zone_action_indices"]`，而不是假设固定偏移量。
+   - 硬编码布局的策略可能看似正常运行，却悄悄控制了错误的执行器。
 
-### Evaluate your policy
+2. **零动作不等于关闭动作**
+   - 对连续动作而言，零表示归一化区间的中点；因此，某个未赋值的位置可能意味着风阀半开，而不是关闭。
+   - 对于需要控制的每个位置，包括希望保持静止或最低运行状态的位置，都应明确赋值。
+
+### Evaluate Your Policy
 
 ```bash
-# One scenario, full 30-day episode
-python -m smart_buildings.evaluate --policies transfer \
+# 一个场景：完整的 30 天 Episode
+uv run python -m smart_buildings.evaluate --policies transfer \
     --buildings building_train_1 --weathers fairbanks_1
 
-# All 30 scenarios
-python -m smart_buildings.evaluate --policies transfer
+# 全部 30 个场景
+uv run python -m smart_buildings.evaluate --policies transfer
 
-# Smoke test: one day, fast, NOT comparable to the baselines
-python -m smart_buildings.evaluate --policies transfer \
+# 冒烟测试：只运行一天，速度快，但不能与 Baseline 直接比较
+uv run python -m smart_buildings.evaluate --policies transfer \
     --buildings building_train_1 --weathers fairbanks_1 --steps 288
 ```
 
-The `--steps` default is 8640, the full 30-day episode, which is the length
-`baseline_returns.json` was run at. Pass a shorter horizon only for a smoke
-test: short horizons skip eco-setback periods and flatter schedule-aware
-policies. Never compare returns taken at different step counts — a shorter
-episode is less negative, so a weaker policy can look better.
+- `--steps` 默认值为 8640，即完整的 30 天 Episode，与 `baseline_returns.json` 中基线评测所使用的长度相同。
+- 只有进行冒烟测试时才应缩短时长：较短的仿真可能跳过节能回退（eco-setback）时段，并使考虑运行时间表的策略显得更好。
+- **不要比较不同步数下获得的 Return**：较短 Episode 的总奖励通常负值更小，从而可能让较弱的策略看起来更好。
 
-This writes `smart_buildings/results/<building>/<weather>/<policy>/summary.json`
-(plus charts and time series) for every scenario.
+对于每个场景，评测结果写入 `smart_buildings/results/<building>/<weather>/<policy>/summary.json`，并包含图表和时间序列数据。
 
-## Generating more training data
+## Generating More Training Data
 
-Building generation is procedural, so you can sample as many additional
-buildings and scenarios as you like during development (the held-out evaluation
-buildings come from the same generator and ranges).
+Buildings采用程序化方式生成，因此可以在开发阶段采样任意数量的新buildings和scenarios。
+Held-out set 中的建筑也来自同一生成器及其参数范围。
 
 ```bash
-# Sample new buildings from seeds 500-509 as YAML + PDF previews. Seeds whose
-# floor plan has a zone below 20 m2 are skipped and listed at the end.
-python -m smart_buildings.run_floor_generator --start-seed 500 --count 10
+# 根据种子 500–509 生成 10 栋建筑的 YAML 和 PDF 预览
+# 若楼层平面图存在小于 20 m² 的 Zone，则跳过对应种子并在末尾列出
+uv run python -m smart_buildings.run_floor_generator --start-seed 500 --count 10
 
-# Turn buildings × weather strips into runnable scenarios
-python -m smart_buildings.run_scenario_generator \
+# 将建筑 × 天气片段转换为可运行场景
+uv run python -m smart_buildings.run_scenario_generator \
     --buildings building_0500 building_0501 --weathers fairbanks_1 phoenix_6
 
-# Inspect / plot a generated scenario
-python -m smart_buildings.run_environment --building building_0500 --weather fairbanks_1
-python -m smart_buildings.run_scenario_generator --plot building_0500 fairbanks_1
+# 查看或绘制生成的场景
+uv run python -m smart_buildings.run_environment --building building_0500 --weather fairbanks_1
+uv run python -m smart_buildings.run_scenario_generator --plot building_0500 fairbanks_1
 ```
 
-Naming `--buildings` or `--weathers` takes the **cross product** of the two
-lists. Running `run_scenario_generator` with no arguments instead rebuilds the
-30 shipped pairs from `training_set.yaml`.
+同时指定 `--buildings` 和 `--weathers` 时，会生成两个列表的**笛卡尔积**。
+如果运行 `run_scenario_generator` 而不传参数，则会根据 `training_set.yaml` 重新构建发布的 30 个场景配对。
 
-Two things to know about what you generate:
+关于生成数据，还有两点需要注意：
 
-- **Construction.** Each generated building gets its own `materials:` block,
-  drawn the same way the shipped six were: six envelope properties sampled
-  independently and stratified across the batch. See
-  `smart_control/utils/materials.py` for the ranges and the reasoning. Pass
-  `--no-materials` to fall back to one default construction.
-- **Air handler count.** `num_ahus` in the YAML is a floor, not the answer. The
-  scenario generator raises it to `ceil(zones / 10)`, so the footprint decides
-  the count. The default footprint ranges are larger than the shipped six, so
-  a generated building can carry more air handlers than any shipped one — and
-  cost proportionally more to simulate. Shrink `width` and `height` in the YAML
-  if you want buildings sized like the shipped set.
+- **Construction**: 每栋生成建筑都有独立的 `materials:` 配置块，其生成方式与发布的 6 栋建筑相同：
+  - 在批次内独立采样并分层分布 6 种围护结构属性。
+  - 参数范围及设计理由见 `smart_control/utils/materials.py`。
+  - 使用 `--no-materials` 可以回退到一套默认建筑构造参数。
+- **AHU Count**: YAML 中的 `num_ahus` 是下限，不一定等于最终数量。
+  - 场景生成器会将它提高到至少 `ceil(zones / 10)`，因此建筑占地布局决定实际 AHU 数量。
+  - 默认生成的建筑平面尺寸范围比发布的 6 栋建筑更大，所以生成建筑可能拥有更多 AHU，仿真成本也会相应增加。
+  - 如果希望生成与发布训练集规模相近的建筑，可缩小 YAML 中的 `width` 和 `height`。
 
-## Reference baselines
+## Reference Baselines
 
-`POLICY_MAP` in `evaluate.py` ships five policies besides `transfer`, so you can
-see what you are competing against:
+除 `transfer` 外，`evaluate.py` 中的 `POLICY_MAP` 还提供以下五种策略，供你了解需要对比的控制方法：
 
-| key | what it does |
-| --- | --- |
-| `bang_bang` | per-air-handler on/off around the comfort band |
-| `fixed_setpoint` | one comfort band around the clock, no eco setback |
-| `pid` | proportional control, fan pressure scaled by control effort |
-| `pid_water` | `pid`, plus modulating reheat and a demand-driven hot water reset |
-| `all_off` | never runs any equipment |
+| 键（key）        | 策略说明                                      |
+| ---------------- | --------------------------------------------- |
+| `bang_bang`      | 根据舒适温度区间，对每个 AHU 执行开关控制     |
+| `fixed_setpoint` | 全天采用统一舒适温度范围，不进行节能回退      |
+| `pid`            | 比例控制，风机压力随控制强度变化              |
+| `pid_water`      | 在 `pid` 基础上增加再热调节及按需重设热水温度 |
+| `all_off`        | 始终不运行任何设备                            |
 
-Run any of them with `--policies`, e.g. `--policies pid bang_bang`.
+在仓库根目录运行以下命令，在 `building_train_1` 的 `fairbanks_1` 场景上评估 `pid` 和 `bang_bang`。每种策略各跑完整的 8,640 步：
 
-The first four are scored alongside your policy as a reference range. `all_off`
-is provided so you can see what an unconditioned building costs; it is kept out
-of that set because a policy that never runs the plant is not a controller
-anyone would write, so it tells you nothing about where a real one stands. See
-the comment on `BASELINES` in `score_leaderboard.py`.
+```bash
+uv run python -m smart_buildings.evaluate \
+  --policies pid bang_bang \
+  --buildings building_train_1 \
+  --weathers fairbanks_1 \
+  --steps 8640 \
+  --results-dir smart_buildings/results/baseline_example
+```
 
-There is no learned baseline. Bring your own.
+如需评估其他基线，替换 `--policies` 后的策略名。若要评估默认场景目录中的所有场景，去掉 `--buildings` 和 `--weathers` 两行。
+
+前四种策略与参赛策略一同作为成绩的参考区间。
+
+`all_off` 用于观察完全不调节的建筑会产生多大代价，但不包含在上述参考区间中：彻底关闭所有设备并不是现实控制器会采用的策略，因此无法说明一个实际控制器表现如何。
+
+跑完上面的评估后，在仓库根目录运行以下命令，查看 `pid` 在该场景的分数及四种基线的参考成绩：
+
+```bash
+uv run python score_leaderboard.py \
+  smart_buildings/results/baseline_example \
+  --policy pid \
+  --expect 1
+```
+
+脚本默认从 `baseline_returns.json` 读取参考成绩，不需要在本地跑齐四种基线。这里只评估了一个场景，提示其他场景缺少 `pid` 结果是正常的；要查看 `bang_bang` 的分数，将 `--policy pid` 改为 `--policy bang_bang`。
+
+**官方没有提供学习得到的基线策略（Learned Baseline），需要参赛者自行实现。**
 
 ## Scoring
 
-Each scenario reports the policy's **total reward** — the per-step trade-off of
-occupant comfort against energy cost and carbon emissions, summed over the
-episode.
+每个场景都会报告策略的**总奖励（Total Reward）**，即在整个 Episode 中，对每步的人员舒适度、能源费用和碳排放加权结果进行求和。
 
-The leaderboard metric is the **mean absolute error against a target of zero**,
-taken over the per-scenario mean per-step reward. **Lower is better.**
+排行榜采用的指标是**每个场景平均每步奖励相对于目标值零的平均绝对误差（Mean Absolute Error Against Zero）**。**分数越低越好。**
 
-The per-step reward is never positive: comfort shortfall, energy cost and carbon
-emission are all charges, and nothing is credited. So the absolute value is just
-the size of your loss, and zero would mean perfect comfort delivered at no energy
-and no carbon cost, which nothing can reach. Treat zero as the ideal and your
-score as the distance from it.
+每一步奖励都不会为正：舒适度不足、能源费用和碳排放均产生惩罚，而不存在正向奖励。因此，绝对值相当于损失的大小。零分意味着完全满足舒适度需求，同时不消耗能源、不产生碳排放；现实中没有控制器能达到这种理想状态。可以将零视为理想目标，将评分视为与该目标的距离。
 
-The 30 per-scenario values are averaged with equal weight. There is no
-per-building or per-weather score: grouping is deliberately avoided, since any
-grouping imposes an arbitrary weighting and hides within-group variance.
+30 个场景的评分采用**等权平均**。不按建筑或天气先进行分组，因为分组会引入任意权重，并掩盖组内差异。
 
-The baseline returns ship in `baseline_returns.json` at the repo root — the
-four baselines run on all 30 shipped training scenarios with 8640-step
-(30-day) episodes. They do not enter the metric, which needs no baselines.
-`score_leaderboard.py` prints them next to your score as a reference range to
-develop against, so you only need to evaluate your own policy. 8640 is the
-`--steps` default, so a plain `evaluate` run is already scoreable.
-Returns from different episode lengths are not comparable, so scoring is
-refused outright if your policy was run at any other step count. Pass
-`--baselines self` to read the reference returns from your own results tree
-instead, which requires running the four baselines alongside your policy.
+仓库根目录的 `baseline_returns.json` 提供了四种基线在全部 30 个发布训练场景上的总奖励，均使用 8640 步（30 天）Episode。
+**这些基线值不参与最终评分计算**，因为评分指标本身不依赖基线。
 
-The official ranking is computed server-side on Kaggle
-(<https://www.kaggle.com/competitions/neurips-2026-smart-buildings/>) over
-held-out evaluation buildings, drawn from the same generator and parameter ranges as the shipped
-six. Their weather strips are built the same way, from recorded station data,
-and none of them is a strip shipped here. So your policy has to transfer to
-**buildings and weather it has not seen**, rather than memorize the shipped
-set.
+`score_leaderboard.py` 只是把基线成绩显示在你的成绩旁边，作为开发参考，因此你只需运行自己的策略评测。
 
-## Reference file guide
+`evaluate` 默认就是 8640 步，可以直接用于评分。
 
-| File | What it does |
-| --- | --- |
-| `run_floor_generator.py` | Sample building configs (`building_XXXX.yaml` + PDF preview). |
-| `run_scenario_generator.py` | Combine buildings × weather into `training_scenarios/` (`config.gin`); can plot a scenario's floor plan and zone map. |
-| `run_environment.py` | Load one scenario, print its action/observation spec and metadata, run a short rollout. |
-| `evaluate.py` | Evaluate **your** policy (any key in `POLICY_MAP`) on selected scenarios. |
-| `score_leaderboard.py` | Turn a results tree into the single leaderboard number, and print the reference baselines beside it. Reads the shipped `baseline_returns.json` by default; `--baselines self` reads those reference returns from your own tree. |
-| `baseline_returns.json` | Baseline `total_reward` per training scenario, at 8640-step episodes. Printed by `score_leaderboard.py` as a reference range; it does not enter the metric. |
-| `check_scales.py` | Assert every scenario's reward denominators match the expected `c x K`. |
+不同 Episode 长度的 Return 不能比较，因此如果你的策略使用了其他步数，评分程序会直接拒绝计算。指定 `--baselines self` 可以从你自己的结果目录读取参考基线成绩，但需要你同时运行四种基线。
 
-## License / attribution
+官方排名由 Kaggle 服务器在隐藏评测建筑上计算：
+<https://www.kaggle.com/competitions/neurips-2026-smart-buildings/>
 
-Apache License 2.0 (see `LICENSE`). Builds on Google's open-source Smart
-Buildings Simulator; see `NOTICE`.
+隐藏建筑与发布的六栋建筑来自同一生成器及参数范围；天气片段也采用相同方法从气象站历史观测数据中构建，但不会使用这里发布的任何片段。因此策略必须迁移到**从未见过的建筑和天气条件**，而不能记忆发布的训练集。
+
+## Reference File Guide
+
+| 文件|用途|
+| - | - |
+|`run_floor_generator.py`|采样生成建筑配置（`building_XXXX.yaml` 和 PDF 预览）|
+|`run_scenario_generator.py`|将建筑 × 天气组合生成 `training_scenarios/`（`config.gin`）；可绘制场景的楼层平面图和 Zone 分布图|
+|`run_environment.py`|加载单个场景，打印动作/观测规格和元数据，运行简短仿真|
+|`evaluate.py`| 在指定场景上评测**你的**策略（`POLICY_MAP` 中的任意键）|
+|`score_leaderboard.py`|将结果目录转换成单个排行榜分数，并同时显示参考基线；默认读取提供的 `baseline_returns.json`，`--baselines self` 则从自己的结果目录读取 |
+|`baseline_returns.json`|训练场景中各基线在 8640 步 Episode 上的 `total_reward`；只用于显示参考区间，不参与最终评分|
+|`check_scales.py`| 检查各场景奖励归一化分母是否符合预期的 `c x K`|
